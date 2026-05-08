@@ -34,6 +34,8 @@ enable_testing()
 # Options, Variable & Constants
 #
 
+option(WTR_NO_SYMLINK   "Report symlinks as path_type::file; removes all is_symlink() calls" OFF)
+
 option(BUILD_LIB        "Create targets for the watcher-c libraries" ON)
 option(BUILD_BIN        "Create targets for the CLI binaries" ON)
 option(BUILD_PKG_CONFIG "Create targets for the pkg-config files" ON)
@@ -419,6 +421,10 @@ endfunction()
 #
 
 add_compile_definitions(WTR_WATCHER_VERSION_S="${PROJECT_VERSION}")
+
+if(WTR_NO_SYMLINK)
+  add_compile_definitions(WTR_NO_SYMLINK)
+endif()
 
 wtr_add_hdr_target(
   "wtr.hdr_watcher"

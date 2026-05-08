@@ -235,9 +235,13 @@ inline auto parse_ev = [](
   auto pathof = [&](inotify_event const* const m)
   { return wd_to_p_or_default(ke.wd_to_p, m->wd) / m->name; };
   auto path = pathof(in);
+#ifdef WTR_NO_SYMLINK
+  auto pt = in->mask & IN_ISDIR ? ev_pt::dir : ev_pt::file;
+#else
   auto pt = in->mask & IN_ISDIR ? ev_pt::dir
           : is_symlink(path)    ? ev_pt::sym_link
                                 : ev_pt::file;
+#endif
   auto et = in->mask & IN_CREATE ? ev_et::create
           : in->mask & IN_DELETE ? ev_et::destroy
           : in->mask & IN_MOVE   ? ev_et::rename

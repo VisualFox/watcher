@@ -179,10 +179,14 @@ inline bool tend_bucket(
         send_event(event{
           bucket_it->first,
           event::effect_type::destroy,
+#ifdef WTR_NO_SYMLINK
+          is_directory(path) ? event::path_type::dir : event::path_type::file});
+#else
           is_regular_file(path) ? event::path_type::file
           : is_directory(path)  ? event::path_type::dir
           : is_symlink(path)    ? event::path_type::sym_link
                                 : event::path_type::other});
+#endif
         /*  bucket, erase it! */
         bucket_it = bucket.erase(bucket_it);
       }();
