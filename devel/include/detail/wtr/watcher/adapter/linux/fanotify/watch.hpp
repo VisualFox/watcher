@@ -200,6 +200,15 @@ parse_ev(fanotify_event_metadata const* const m, size_t read_len, int* ec)
   using ev_et = enum ev::effect_type;
   auto n = peek(m, read_len);
   auto pt = m->mask & FAN_ONDIR ? ev_pt::dir : ev_pt::file;
+#ifdef WTR_NO_RENAME
+  auto et = m->mask & FAN_CREATE     ? ev_et::create
+          : m->mask & FAN_DELETE     ? ev_et::destroy
+          : m->mask & FAN_MOVED_FROM ? ev_et::destroy
+          : m->mask & FAN_MOVED_TO   ? ev_et::create
+          : m->mask & FAN_MODIFY     ? ev_et::modify
+                                     : ev_et::other;
+  return Parsed{ev(pathof(m, ec), et, pt), n, m->event_len};
+#else
   auto et = m->mask & FAN_CREATE ? ev_et::create
           : m->mask & FAN_DELETE ? ev_et::destroy
           : m->mask & FAN_MODIFY ? ev_et::modify
@@ -221,6 +230,7 @@ parse_ev(fanotify_event_metadata const* const m, size_t read_len, int* ec)
        : isfromto(m->mask, n->mask) ? assoc(m, n)
        : isfromto(n->mask, m->mask) ? assoc(n, m)
        : (*ec = 2, one(m));
+#endif
 }
 
 inline auto is_newdir = [](::wtr::watcher::event const& ev) -> bool

@@ -69,7 +69,9 @@ struct ContextData {
 
   ::wtr::watcher::event::callback const& callback{};
   pathset* seen_created_paths{nullptr};
+#ifndef WTR_NO_RENAME
   fspath* last_rename_path{nullptr};
+#endif
   std::mutex* mtx{nullptr};
 };
 
@@ -110,6 +112,17 @@ inline auto event_recv_one(ContextData& ctx, char const* path, unsigned flags)
     ctx.callback({path, ety::modify, pt});
   }
   if (flags & fsev_flag_effect_rename) {
+#ifdef WTR_NO_RENAME
+    if (access(path, F_OK) == -1) {
+      auto at = ctx.seen_created_paths->find(path);
+      if (at != ctx.seen_created_paths->end())
+        ctx.seen_created_paths->erase(at);
+      ctx.callback({path, ety::destroy, pt});
+    } else {
+      ctx.seen_created_paths->emplace(path);
+      ctx.callback({path, ety::create, pt});
+    }
+#else
     /*  Assumes that the last "renamed-from" path
         is "honestly" correlated to the current
         "rename-to" path.
@@ -150,6 +163,7 @@ inline auto event_recv_one(ContextData& ctx, char const* path, unsigned flags)
       if (at != ctx.seen_created_paths->end())
         ctx.seen_created_paths->erase(at);
     }
+#endif
   }
 }
 
@@ -331,9 +345,15 @@ inline auto watch(
   semabin const& living) -> bool
 {
   auto seen_created_paths = ContextData::pathset{};
+#ifndef WTR_NO_RENAME
   auto last_rename_path = ContextData::fspath{};
+#endif
   auto mtx = std::mutex{};
+#ifdef WTR_NO_RENAME
+  auto ctx = ContextData{cb, &seen_created_paths, &mtx};
+#else
   auto ctx = ContextData{cb, &seen_created_paths, &last_rename_path, &mtx};
+#endif
   auto fsevs = open_event_stream(path, &ctx);
   auto state_ok = wait(living) == semabin::released;
   auto close_ok = close_event_stream(fsevs, ctx);

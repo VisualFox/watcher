@@ -19,6 +19,7 @@
 
 namespace detail::wtr::watcher::adapter::inotify {
 
+#ifndef WTR_NO_RENAME
 struct fae {
   static constexpr int idx_ulim = 16;
 
@@ -29,6 +30,7 @@ struct fae {
 
   int idx_rm = 0;
 };
+#endif
 
 // clang-format off
 struct ke_in_ev {
@@ -98,7 +100,9 @@ struct ke_in_ev {
     | IN_MOVED_TO;
 
   int fd = -1;
+#ifndef WTR_NO_RENAME
   struct fae fae{};
+#endif
   std::unordered_map<int, std::filesystem::path> wd_to_p;
   std::unordered_map<std::string, int> p_to_wd;
   alignas(inotify_event) char ev_buf[buf_len]{0};
@@ -123,6 +127,7 @@ inline auto wd_to_p_or_default =
   return at != wd_to_p.end() ? at->second : "";
 };
 
+#ifndef WTR_NO_RENAME
 inline auto update_path_maps_on_rename =
   [](ke_in_ev& ke, auto const& from, auto const& to) -> void
 {
@@ -134,6 +139,7 @@ inline auto update_path_maps_on_rename =
     ke.wd_to_p[wd] = to;
   }
 };
+#endif
 
 inline auto do_mark =
   [](char const* const dirpath, int dirfd, auto& wd_to_p, auto& p_to_wd, auto const& cb) -> result
@@ -208,12 +214,16 @@ inline auto peek = [](
 };
 
 struct parsed {
+#ifndef WTR_NO_RENAME
   static constexpr uint16_t err_pending = 1 << 0;
   static constexpr uint16_t err_overflow = 1 << 1;
   static constexpr uint16_t err_partial = 1 << 2;
+#endif
   ::wtr::watcher::event ev{};
   inotify_event* next = nullptr;
+#ifndef WTR_NO_RENAME
   uint16_t err = 0;
+#endif
 };
 
 /* Constructs a `parsed` event from an read(2)-populated inotify event buffer.
@@ -238,6 +248,15 @@ inline auto parse_ev = [](
   auto pt = in->mask & IN_ISDIR ? ev_pt::dir
           : is_symlink(path)    ? ev_pt::sym_link
                                 : ev_pt::file;
+#ifdef WTR_NO_RENAME
+  auto et = in->mask & IN_CREATE     ? ev_et::create
+          : in->mask & IN_DELETE     ? ev_et::destroy
+          : in->mask & IN_MOVED_FROM ? ev_et::destroy
+          : in->mask & IN_MOVED_TO   ? ev_et::create
+          : in->mask & IN_MODIFY     ? ev_et::modify
+                                     : ev_et::other;
+  return parsed{{path, et, pt}, peek(in, tail)};
+#else
   auto et = in->mask & IN_CREATE ? ev_et::create
           : in->mask & IN_DELETE ? ev_et::destroy
           : in->mask & IN_MOVE   ? ev_et::rename
@@ -274,6 +293,7 @@ inline auto parse_ev = [](
   ke.fae.evs[ke.fae.idx_rm] = {{path, et, pt}, in->cookie};
   ke.fae.idx_rm = (ke.fae.idx_rm + 1) % fae::idx_ulim;
   return {last_ev, next, err};
+#endif
 };
 
 struct defer_dm_rm_wd {
@@ -412,6 +432,15 @@ inline auto do_ev_recv = [](auto const& cb, sysres& sr) -> result
         send_msg(result::w_sys_q_overflow, "", cb);
       else if (is_real_event(msk)) {
         auto parsed = parse_ev(sr.ke, in_ev, in_ev_tail);
+#ifdef WTR_NO_RENAME
+        if (msk & IN_ISDIR && (msk & IN_CREATE || msk & IN_MOVED_TO))
+          walkdir_do(parsed.ev.path_name.c_str(), [&](auto dir) {
+            do_mark(dir, sr.ke.fd, sr.ke.wd_to_p, sr.ke.p_to_wd, cb);
+            cb({dir, parsed.ev.effect_type, parsed.ev.path_type});
+          });
+        else
+          cb(parsed.ev);
+#else
         if (parsed.err & parsed::err_overflow)
           send_msg(result::w_self_q_overflow, parsed.ev.path_name.c_str(), cb);
         if (parsed.err & parsed::err_partial)
@@ -423,6 +452,7 @@ inline auto do_ev_recv = [](auto const& cb, sysres& sr) -> result
           });
         else if (! (parsed.err & parsed::err_pending))
           cb(parsed.ev);
+#endif
         in_ev_next = parsed.next;
       }
       in_ev = in_ev_next;

@@ -122,14 +122,17 @@ inline auto do_event_send(
 {
   using namespace ::wtr::watcher;
 
+#ifndef WTR_NO_RENAME
   struct RenameEventTracker {
     std::filesystem::path path_name;
     enum event::effect_type effect_type;
     enum event::path_type path_type;
     bool set = false;
   };
+#endif
 
   FILE_NOTIFY_INFORMATION* buf = w.event_buf;
+#ifndef WTR_NO_RENAME
   /*  Rename events on Windows send two individual messages
       that correspond with the old data and the new data.
       While it is believed that these are sent sequentially
@@ -156,6 +159,7 @@ inline auto do_event_send(
     old_tracker = {};
     new_tracker = {};
   };
+#endif
 
   if (! w.is_valid) return false;
   while ((uint8_t*)buf < (uint8_t*)w.event_buf + w.event_buf_len_ready) {
@@ -169,8 +173,13 @@ inline auto do_event_send(
           case FILE_ACTION_MODIFIED : return event::effect_type::modify;
           case FILE_ACTION_ADDED : return event::effect_type::create;
           case FILE_ACTION_REMOVED : return event::effect_type::destroy;
+#ifdef WTR_NO_RENAME
+          case FILE_ACTION_RENAMED_OLD_NAME : return event::effect_type::destroy;
+          case FILE_ACTION_RENAMED_NEW_NAME : return event::effect_type::create;
+#else
           case FILE_ACTION_RENAMED_OLD_NAME : return event::effect_type::rename;
           case FILE_ACTION_RENAMED_NEW_NAME : return event::effect_type::rename;
+#endif
           default : return event::effect_type::other;
         }
       }();
@@ -204,6 +213,9 @@ inline auto do_event_send(
         }
       }();
 
+#ifdef WTR_NO_RENAME
+      callback({path_name, effect_type, path_type});
+#else
       if (buf->Action == FILE_ACTION_RENAMED_OLD_NAME) {
         old_tracker.path_name = path_name;
         old_tracker.effect_type = effect_type;
@@ -221,6 +233,7 @@ inline auto do_event_send(
       else {
         callback({path_name, effect_type, path_type});
       }
+#endif
       if (buf->NextEntryOffset == 0)
         break;
       else
