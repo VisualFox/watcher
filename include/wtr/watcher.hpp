@@ -549,7 +549,9 @@ struct ContextData {
 
   ::wtr::watcher::event::callback const& callback{};
   pathset* seen_created_paths{nullptr};
+#ifndef WTR_NO_RENAME
   fspath* last_rename_path{nullptr};
+#endif
   std::mutex* mtx{nullptr};
 };
 
@@ -590,6 +592,17 @@ inline auto event_recv_one(ContextData& ctx, char const* path, unsigned flags)
     ctx.callback({path, ety::modify, pt});
   }
   if (flags & fsev_flag_effect_rename) {
+#ifdef WTR_NO_RENAME
+    if (access(path, F_OK) == -1) {
+      auto at = ctx.seen_created_paths->find(path);
+      if (at != ctx.seen_created_paths->end())
+        ctx.seen_created_paths->erase(at);
+      ctx.callback({path, ety::destroy, pt});
+    } else {
+      ctx.seen_created_paths->emplace(path);
+      ctx.callback({path, ety::create, pt});
+    }
+#else
     /*  Assumes that the last "renamed-from" path
         is "honestly" correlated to the current
         "rename-to" path.
@@ -630,6 +643,7 @@ inline auto event_recv_one(ContextData& ctx, char const* path, unsigned flags)
       if (at != ctx.seen_created_paths->end())
         ctx.seen_created_paths->erase(at);
     }
+#endif
   }
 }
 
@@ -811,9 +825,15 @@ inline auto watch(
   semabin const& living) -> bool
 {
   auto seen_created_paths = ContextData::pathset{};
+#ifndef WTR_NO_RENAME
   auto last_rename_path = ContextData::fspath{};
+#endif
   auto mtx = std::mutex{};
+#ifdef WTR_NO_RENAME
+  auto ctx = ContextData{cb, &seen_created_paths, &mtx};
+#else
   auto ctx = ContextData{cb, &seen_created_paths, &last_rename_path, &mtx};
+#endif
   auto fsevs = open_event_stream(path, &ctx);
   auto state_ok = wait(living) == semabin::released;
   auto close_ok = close_event_stream(fsevs, ctx);
@@ -1200,6 +1220,15 @@ parse_ev(fanotify_event_metadata const* const m, size_t read_len, int* ec)
   using ev_et = enum ev::effect_type;
   auto n = peek(m, read_len);
   auto pt = m->mask & FAN_ONDIR ? ev_pt::dir : ev_pt::file;
+#ifdef WTR_NO_RENAME
+  auto et = m->mask & FAN_CREATE     ? ev_et::create
+          : m->mask & FAN_DELETE     ? ev_et::destroy
+          : m->mask & FAN_MOVED_FROM ? ev_et::destroy
+          : m->mask & FAN_MOVED_TO   ? ev_et::create
+          : m->mask & FAN_MODIFY     ? ev_et::modify
+                                     : ev_et::other;
+  return Parsed{ev(pathof(m, ec), et, pt), n, m->event_len};
+#else
   auto et = m->mask & FAN_CREATE ? ev_et::create
           : m->mask & FAN_DELETE ? ev_et::destroy
           : m->mask & FAN_MODIFY ? ev_et::modify
@@ -1221,6 +1250,7 @@ parse_ev(fanotify_event_metadata const* const m, size_t read_len, int* ec)
        : isfromto(m->mask, n->mask) ? assoc(m, n)
        : isfromto(n->mask, m->mask) ? assoc(n, m)
        : (*ec = 2, one(m));
+#endif
 }
 
 inline auto is_newdir = [](::wtr::watcher::event const& ev) -> bool
@@ -1316,6 +1346,7 @@ inline auto do_ev_recv = [](auto const& cb, sysres& sr) -> result
 
 namespace detail::wtr::watcher::adapter::inotify {
 
+#ifndef WTR_NO_RENAME
 struct fae {
   static constexpr int idx_ulim = 16;
 
@@ -1326,6 +1357,7 @@ struct fae {
 
   int idx_rm = 0;
 };
+#endif
 
 // clang-format off
 struct ke_in_ev {
@@ -1395,7 +1427,9 @@ struct ke_in_ev {
     | IN_MOVED_TO;
 
   int fd = -1;
+#ifndef WTR_NO_RENAME
   struct fae fae{};
+#endif
   std::unordered_map<int, std::filesystem::path> wd_to_p;
   std::unordered_map<std::string, int> p_to_wd;
   alignas(inotify_event) char ev_buf[buf_len]{0};
@@ -1420,6 +1454,7 @@ inline auto wd_to_p_or_default =
   return at != wd_to_p.end() ? at->second : "";
 };
 
+#ifndef WTR_NO_RENAME
 inline auto update_path_maps_on_rename =
   [](ke_in_ev& ke, auto const& from, auto const& to) -> void
 {
@@ -1431,6 +1466,7 @@ inline auto update_path_maps_on_rename =
     ke.wd_to_p[wd] = to;
   }
 };
+#endif
 
 inline auto do_mark =
   [](char const* const dirpath, int dirfd, auto& wd_to_p, auto& p_to_wd, auto const& cb) -> result
@@ -1505,12 +1541,16 @@ inline auto peek = [](
 };
 
 struct parsed {
+#ifndef WTR_NO_RENAME
   static constexpr uint16_t err_pending = 1 << 0;
   static constexpr uint16_t err_overflow = 1 << 1;
   static constexpr uint16_t err_partial = 1 << 2;
+#endif
   ::wtr::watcher::event ev{};
   inotify_event* next = nullptr;
+#ifndef WTR_NO_RENAME
   uint16_t err = 0;
+#endif
 };
 
 /* Constructs a `parsed` event from an read(2)-populated inotify event buffer.
@@ -1535,6 +1575,15 @@ inline auto parse_ev = [](
   auto pt = in->mask & IN_ISDIR ? ev_pt::dir
           : is_symlink(path)    ? ev_pt::sym_link
                                 : ev_pt::file;
+#ifdef WTR_NO_RENAME
+  auto et = in->mask & IN_CREATE     ? ev_et::create
+          : in->mask & IN_DELETE     ? ev_et::destroy
+          : in->mask & IN_MOVED_FROM ? ev_et::destroy
+          : in->mask & IN_MOVED_TO   ? ev_et::create
+          : in->mask & IN_MODIFY     ? ev_et::modify
+                                     : ev_et::other;
+  return parsed{{path, et, pt}, peek(in, tail)};
+#else
   auto et = in->mask & IN_CREATE ? ev_et::create
           : in->mask & IN_DELETE ? ev_et::destroy
           : in->mask & IN_MOVE   ? ev_et::rename
@@ -1571,6 +1620,7 @@ inline auto parse_ev = [](
   ke.fae.evs[ke.fae.idx_rm] = {{path, et, pt}, in->cookie};
   ke.fae.idx_rm = (ke.fae.idx_rm + 1) % fae::idx_ulim;
   return {last_ev, next, err};
+#endif
 };
 
 struct defer_dm_rm_wd {
@@ -1709,6 +1759,15 @@ inline auto do_ev_recv = [](auto const& cb, sysres& sr) -> result
         send_msg(result::w_sys_q_overflow, "", cb);
       else if (is_real_event(msk)) {
         auto parsed = parse_ev(sr.ke, in_ev, in_ev_tail);
+#ifdef WTR_NO_RENAME
+        if (msk & IN_ISDIR && (msk & IN_CREATE || msk & IN_MOVED_TO))
+          walkdir_do(parsed.ev.path_name.c_str(), [&](auto dir) {
+            do_mark(dir, sr.ke.fd, sr.ke.wd_to_p, sr.ke.p_to_wd, cb);
+            cb({dir, parsed.ev.effect_type, parsed.ev.path_type});
+          });
+        else
+          cb(parsed.ev);
+#else
         if (parsed.err & parsed::err_overflow)
           send_msg(result::w_self_q_overflow, parsed.ev.path_name.c_str(), cb);
         if (parsed.err & parsed::err_partial)
@@ -1720,6 +1779,7 @@ inline auto do_ev_recv = [](auto const& cb, sysres& sr) -> result
           });
         else if (! (parsed.err & parsed::err_pending))
           cb(parsed.ev);
+#endif
         in_ev_next = parsed.next;
       }
       in_ev = in_ev_next;
@@ -1944,14 +2004,17 @@ inline auto do_event_send(
 {
   using namespace ::wtr::watcher;
 
+#ifndef WTR_NO_RENAME
   struct RenameEventTracker {
     std::filesystem::path path_name;
     enum event::effect_type effect_type;
     enum event::path_type path_type;
     bool set = false;
   };
+#endif
 
   FILE_NOTIFY_INFORMATION* buf = w.event_buf;
+#ifndef WTR_NO_RENAME
   /*  Rename events on Windows send two individual messages
       that correspond with the old data and the new data.
       While it is believed that these are sent sequentially
@@ -1978,6 +2041,7 @@ inline auto do_event_send(
     old_tracker = {};
     new_tracker = {};
   };
+#endif
 
   if (! w.is_valid) return false;
   while ((uint8_t*)buf < (uint8_t*)w.event_buf + w.event_buf_len_ready) {
@@ -1991,8 +2055,13 @@ inline auto do_event_send(
           case FILE_ACTION_MODIFIED : return event::effect_type::modify;
           case FILE_ACTION_ADDED : return event::effect_type::create;
           case FILE_ACTION_REMOVED : return event::effect_type::destroy;
+#ifdef WTR_NO_RENAME
+          case FILE_ACTION_RENAMED_OLD_NAME : return event::effect_type::destroy;
+          case FILE_ACTION_RENAMED_NEW_NAME : return event::effect_type::create;
+#else
           case FILE_ACTION_RENAMED_OLD_NAME : return event::effect_type::rename;
           case FILE_ACTION_RENAMED_NEW_NAME : return event::effect_type::rename;
+#endif
           default : return event::effect_type::other;
         }
       }();
@@ -2026,6 +2095,9 @@ inline auto do_event_send(
         }
       }();
 
+#ifdef WTR_NO_RENAME
+      callback({path_name, effect_type, path_type});
+#else
       if (buf->Action == FILE_ACTION_RENAMED_OLD_NAME) {
         old_tracker.path_name = path_name;
         old_tracker.effect_type = effect_type;
@@ -2043,6 +2115,7 @@ inline auto do_event_send(
       else {
         callback({path_name, effect_type, path_type});
       }
+#endif
       if (buf->NextEntryOffset == 0)
         break;
       else
