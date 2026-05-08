@@ -81,11 +81,17 @@ inline auto event_recv_one(ContextData& ctx, char const* path, unsigned flags)
   using ety = enum ::wtr::watcher::event::effect_type;
 
   /*  A single path won't have different "types". */
+#ifdef WTR_NO_SYMLINK
+  auto pt = flags & fsev_flag_path_dir       ? pty::dir
+          : flags & fsev_flag_path_hard_link ? pty::hard_link
+                                             : pty::file;
+#else
   auto pt = flags & fsev_flag_path_file      ? pty::file
           : flags & fsev_flag_path_dir       ? pty::dir
           : flags & fsev_flag_path_sym_link  ? pty::sym_link
           : flags & fsev_flag_path_hard_link ? pty::hard_link
                                              : pty::other;
+#endif
   /*  More than one thing can happen to the same path.
       (So these `if`s are mostly not exclusive.)
       We want to report odd events (even with an empty path)

@@ -561,11 +561,17 @@ inline auto event_recv_one(ContextData& ctx, char const* path, unsigned flags)
   using ety = enum ::wtr::watcher::event::effect_type;
 
   /*  A single path won't have different "types". */
+#ifdef WTR_NO_SYMLINK
+  auto pt = flags & fsev_flag_path_dir       ? pty::dir
+          : flags & fsev_flag_path_hard_link ? pty::hard_link
+                                             : pty::file;
+#else
   auto pt = flags & fsev_flag_path_file      ? pty::file
           : flags & fsev_flag_path_dir       ? pty::dir
           : flags & fsev_flag_path_sym_link  ? pty::sym_link
           : flags & fsev_flag_path_hard_link ? pty::hard_link
                                              : pty::other;
+#endif
   /*  More than one thing can happen to the same path.
       (So these `if`s are mostly not exclusive.)
       We want to report odd events (even with an empty path)
@@ -1572,9 +1578,13 @@ inline auto parse_ev = [](
   auto pathof = [&](inotify_event const* const m)
   { return wd_to_p_or_default(ke.wd_to_p, m->wd) / m->name; };
   auto path = pathof(in);
+#ifdef WTR_NO_SYMLINK
+  auto pt = in->mask & IN_ISDIR ? ev_pt::dir : ev_pt::file;
+#else
   auto pt = in->mask & IN_ISDIR ? ev_pt::dir
           : is_symlink(path)    ? ev_pt::sym_link
                                 : ev_pt::file;
+#endif
 #ifdef WTR_NO_RENAME
   auto et = in->mask & IN_CREATE     ? ev_et::create
           : in->mask & IN_DELETE     ? ev_et::destroy
@@ -2342,10 +2352,14 @@ inline bool tend_bucket(
         send_event(event{
           bucket_it->first,
           event::effect_type::destroy,
+#ifdef WTR_NO_SYMLINK
+          is_directory(path) ? event::path_type::dir : event::path_type::file});
+#else
           is_regular_file(path) ? event::path_type::file
           : is_directory(path)  ? event::path_type::dir
           : is_symlink(path)    ? event::path_type::sym_link
                                 : event::path_type::other});
+#endif
         /*  bucket, erase it! */
         bucket_it = bucket.erase(bucket_it);
       }();

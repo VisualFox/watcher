@@ -35,6 +35,7 @@ enable_testing()
 #
 
 option(WTR_NO_RENAME    "Report OS move events as create/destroy pairs; removes all rename-pairing machinery" OFF)
+option(WTR_NO_SYMLINK   "Report symlinks as path_type::file; removes all is_symlink() calls" OFF)
 
 option(BUILD_LIB        "Create targets for the watcher-c libraries" ON)
 option(BUILD_BIN        "Create targets for the CLI binaries" ON)
@@ -424,6 +425,9 @@ add_compile_definitions(WTR_WATCHER_VERSION_S="${PROJECT_VERSION}")
 
 if(WTR_NO_RENAME)
   add_compile_definitions(WTR_NO_RENAME)
+endif()
+if(WTR_NO_SYMLINK)
+  add_compile_definitions(WTR_NO_SYMLINK)
 endif()
 
 wtr_add_hdr_target(
